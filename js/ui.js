@@ -119,11 +119,23 @@ export function renderBuilder(root, { onReady }) {
   update();
 }
 
+// Nomeia os lados para exibição; em partida-espelho (mesmo Navi dos
+// dois lados) acrescenta (você)/(rival) para o log não ficar ambíguo.
+export function sideNamer(playerName, enemyName) {
+  const mirror = playerName === enemyName;
+  return side => {
+    const n = side === 'player' ? playerName : enemyName;
+    if (!mirror) return n;
+    return `${n} ${side === 'player' ? '(você)' : '(rival)'}`;
+  };
+}
+
 // opponent: { template, config } vindo de pickOpponent().
 // onEnd recebe { winner, rounds, playerHp, playerMaxHp, enemyName }.
 export function renderBattle(root, playerConfig, opponent, onEnd) {
   root.innerHTML = '';
   const battle = createBattle(playerConfig, opponent.config);
+  const sideName = sideNamer(playerConfig.navi.name, opponent.config.navi.name);
   let speed = 1;
 
   const playerCanvas = h('canvas', { width: 96, height: 96 });
@@ -136,7 +148,7 @@ export function renderBattle(root, playerConfig, opponent, onEnd) {
     const s = battle.sides[side];
     return h('div', { class: 'fighter', id: `fighter-${side}` },
       canvas,
-      h('div', { class: 'fighter-name' }, `${s.navi.name} (${EL_NAMES[s.navi.element]})`),
+      h('div', { class: 'fighter-name' }, `${sideName(side)} (${EL_NAMES[s.navi.element]})`),
       h('div', { class: 'hp-bar' }, h('div', { class: 'hp-fill', id: `hp-fill-${side}` })),
       h('div', { class: 'hp-text', id: `hp-text-${side}` }));
   }
@@ -221,7 +233,7 @@ export function renderBattle(root, playerConfig, opponent, onEnd) {
   }
 
   function describe(ev) {
-    const name = s => battle.sides[s].navi.name;
+    const name = sideName;
     switch (ev.type) {
       case 'chip': return `${name(ev.side)} usou ${ev.chip.name}!`;
       case 'naviAttack': return `${name(ev.side)} disparou ${ev.chip.name}!`;
@@ -242,7 +254,7 @@ export function renderBattle(root, playerConfig, opponent, onEnd) {
     while (battle.winner === null) {
       const aiIdx = aiChooseSlotIn(battle);
       if (aiIdx !== null && useSlotIn(battle, 'enemy', aiIdx)) {
-        log(`${opponent.config.navi.name} usou Slot-In!`);
+        log(`${sideName('enemy')} usou Slot-In!`);
         await sleep(500);
       }
       const events = playRound(battle);
