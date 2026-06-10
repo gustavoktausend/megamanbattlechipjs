@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CHIPS, CHIP_BY_ID, DECK_SIZE, SLOTIN_SIZE, MAX_COPIES } from '../js/data/chips.js';
 import { NAVIS, NAVI_BY_ID, AI_DECKS } from '../js/data/navis.js';
+import { NAVI_SPRITE_MAP, NAVI_PALETTES } from '../js/sprites.js';
 
 const KINDS = ['attack', 'defense', 'heal'];
 const ELEMENTS = ['neutro', 'fogo', 'agua', 'eletrico', 'madeira'];
@@ -57,5 +58,19 @@ test('decks da IA são válidos', () => {
       counts[id] = (counts[id] || 0) + 1;
       assert.ok(counts[id] <= MAX_COPIES, `mais de ${MAX_COPIES} cópias de ${id}`);
     }
+  }
+});
+
+test('sprite é 16x16 e todas as cores existem nas paletas', () => {
+  assert.equal(NAVI_SPRITE_MAP.length, 16);
+  const chars = new Set();
+  for (const row of NAVI_SPRITE_MAP) {
+    assert.equal(row.length, 16, `linha com largura errada: "${row}"`);
+    for (const ch of row) if (ch !== '.') chars.add(ch);
+  }
+  for (const n of NAVIS) {
+    const pal = NAVI_PALETTES[n.id];
+    assert.ok(pal, `paleta faltando para ${n.id}`);
+    for (const ch of chars) assert.ok(pal[ch], `cor '${ch}' faltando na paleta de ${n.id}`);
   }
 });
