@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CHIPS, CHIP_BY_ID, DECK_SIZE, SLOTIN_SIZE, MAX_COPIES } from '../js/data/chips.js';
+import { NAVIS, NAVI_BY_ID, AI_DECKS } from '../js/data/navis.js';
 
 const KINDS = ['attack', 'defense', 'heal'];
 const ELEMENTS = ['neutro', 'fogo', 'agua', 'eletrico', 'madeira'];
@@ -28,4 +29,33 @@ test('todo chip tem campos válidos', () => {
 
 test('CHIP_BY_ID indexa todos os chips', () => {
   for (const c of CHIPS) assert.equal(CHIP_BY_ID[c.id], c);
+});
+
+test('há 4 Navis com campos válidos', () => {
+  assert.equal(NAVIS.length, 4);
+  assert.equal(new Set(NAVIS.map(n => n.id)).size, 4);
+  for (const n of NAVIS) {
+    assert.ok(n.id && n.name, `navi sem id/nome`);
+    assert.ok(ELEMENTS.includes(n.element), `elemento inválido em ${n.id}`);
+    assert.ok(Number.isInteger(n.maxHp) && n.maxHp > 0, `maxHp inválido em ${n.id}`);
+    assert.ok(n.naviAttack && n.naviAttack.name, `naviAttack sem nome em ${n.id}`);
+    assert.ok(Number.isInteger(n.naviAttack.power) && n.naviAttack.power > 0, `naviAttack.power inválido em ${n.id}`);
+    assert.equal(NAVI_BY_ID[n.id], n);
+  }
+});
+
+test('decks da IA são válidos', () => {
+  assert.ok(AI_DECKS.length >= 6, 'pelo menos 6 templates');
+  for (const t of AI_DECKS) {
+    assert.ok(NAVI_BY_ID[t.naviId], `naviId desconhecido: ${t.naviId}`);
+    assert.ok([1, 2, 3].includes(t.difficulty), `dificuldade inválida em ${t.naviId}`);
+    assert.equal(t.deck.length, DECK_SIZE, 'deck de 12');
+    assert.equal(t.slotIns.length, SLOTIN_SIZE, 'slot-in de 3');
+    const counts = {};
+    for (const id of [...t.deck, ...t.slotIns]) {
+      assert.ok(CHIP_BY_ID[id], `chip desconhecido: ${id}`);
+      counts[id] = (counts[id] || 0) + 1;
+      assert.ok(counts[id] <= MAX_COPIES, `mais de ${MAX_COPIES} cópias de ${id}`);
+    }
+  }
 });
