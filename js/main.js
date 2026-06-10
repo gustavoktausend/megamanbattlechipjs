@@ -1,5 +1,6 @@
 // Boot e roteamento entre telas. Estado da sessão vive aqui.
-import { renderTitle, renderBuilder } from './ui.js';
+import { renderTitle, renderBuilder, renderBattle, renderResult } from './ui.js';
+import { pickOpponent } from './ai.js';
 
 const els = {
   title: document.getElementById('screen-title'),
@@ -30,9 +31,17 @@ function goBuilder() {
 }
 
 function goBattle() {
-  // Task 9 liga a tela de batalha; por enquanto confirma o fluxo.
-  els.battle.textContent = 'Batalha em construção (Task 9)';
+  const opponent = pickOpponent();
+  renderBattle(els.battle, session.playerConfig, opponent, res => {
+    session.result = res;
+    goResult();
+  });
   show('battle');
+}
+
+function goResult() {
+  renderResult(els.result, session.result, { onRematch: goBattle, onNewDeck: goBuilder });
+  show('result');
 }
 
 goTitle();

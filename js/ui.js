@@ -1,6 +1,8 @@
 // Renderização das telas. Toda manipulação de DOM vive aqui.
 import { CHIPS, CHIP_BY_ID, DECK_SIZE, SLOTIN_SIZE, MAX_COPIES } from './data/chips.js';
 import { NAVIS, NAVI_BY_ID } from './data/navis.js';
+import { createBattle, useSlotIn, playRound, nextChip } from './battle.js';
+import { aiChooseSlotIn } from './ai.js';
 import { drawNavi } from './sprites.js';
 
 export const EL_NAMES = { neutro: 'Neutro', fogo: 'Fogo', agua: 'Água', eletrico: 'Elétrico', madeira: 'Madeira' };
@@ -115,4 +117,164 @@ export function renderBuilder(root, { onReady }) {
   }
 
   update();
+}
+
+// opponent: { template, config } vindo de pickOpponent().
+// onEnd recebe { winner, rounds, playerHp, playerMaxHp, enemyName }.
+export function renderBattle(root, playerConfig, opponent, onEnd) {
+  root.innerHTML = '';
+  const battle = createBattle(playerConfig, opponent.config);
+  let speed = 1;
+
+  const playerCanvas = h('canvas', { width: 96, height: 96 });
+  const enemyCanvas = h('canvas', { width: 96, height: 96 });
+  const roundEl = h('span', {}, 'ROUND 1');
+  const speedBtn = h('button', { onclick: () => { speed = speed === 1 ? 2 : 1; speedBtn.textContent = `VELOCIDADE ${speed}x`; } }, 'VELOCIDADE 1x');
+  const logEl = h('div', { class: 'battle-log' });
+
+  function fighterBox(canvas, side) {
+    const s = battle.sides[side];
+    return h('div', { class: 'fighter', id: `fighter-${side}` },
+      canvas,
+      h('div', { class: 'fighter-name' }, `${s.navi.name} (${EL_NAMES[s.navi.element]})`),
+      h('div', { class: 'hp-bar' }, h('div', { class: 'hp-fill', id: `hp-fill-${side}` })),
+      h('div', { class: 'hp-text', id: `hp-text-${side}` }));
+  }
+
+  const playerQueue = h('div', { class: 'queue-chips', id: 'queue-player' });
+  const enemyQueue = h('div', { class: 'queue-chips', id: 'queue-enemy' });
+  const slotInBar = h('div', { class: 'slotin-bar' }, h('h3', {}, 'SLOT-IN:'));
+  const slotBtns = battle.sides.player.slotIns.map((c, i) =>
+    chipCard(c, {
+      onclick: () => {
+        if (useSlotIn(battle, 'player', i)) {
+          log(`Slot-In preparado: ${c.name}!`);
+          updateHud();
+        }
+      },
+    }));
+  slotInBar.append(...slotBtns);
+
+  root.append(
+    h('div', { class: 'battle-header' }, roundEl, speedBtn),
+    h('div', { class: 'arena' }, fighterBox(playerCanvas, 'player'), fighterBox(enemyCanvas, 'enemy')),
+    h('div', { class: 'queues' },
+      h('div', { class: 'queue' }, h('h3', {}, 'SEUS PRÓXIMOS CHIPS'), playerQueue),
+      h('div', { class: 'queue' }, h('h3', {}, 'CHIP DO OPONENTE'), enemyQueue)),
+    slotInBar,
+    logEl);
+
+  drawNavi(playerCanvas, playerConfig.navi.id);
+  drawNavi(enemyCanvas, opponent.config.navi.id, true);
+
+  function log(msg) {
+    logEl.prepend(h('div', {}, msg));
+  }
+
+  function upcomingPlayer() {
+    const side = battle.sides.player;
+    const list = [];
+    if (side.pendingSlotIn !== null) {
+      list.push({ ...side.slotIns[side.pendingSlotIn], fromSlotIn: true });
+    }
+    let idx = side.deckIndex;
+    while (list.length < 3) {
+      if (idx === DECK_SIZE) {
+        list.push({ name: side.navi.naviAttack.name, element: side.navi.element, special: true });
+        idx = 0;
+      } else {
+        list.push(side.deck[idx++]);
+      }
+    }
+    return list;
+  }
+
+  function updateHud() {
+    roundEl.textContent = `ROUND ${Math.max(1, battle.round)}`;
+    for (const side of ['player', 'enemy']) {
+      const s = battle.sides[side];
+      const pct = (s.hp / s.navi.maxHp) * 100;
+      const fill = document.getElementById(`hp-fill-${side}`);
+      fill.style.width = `${pct}%`;
+      fill.classList.toggle('low', pct < 30);
+      document.getElementById(`hp-text-${side}`).textContent = `${s.hp}/${s.navi.maxHp} HP`;
+    }
+    playerQueue.innerHTML = '';
+    playerQueue.append(...upcomingPlayer().map(c =>
+      h('div', { class: `queue-chip${c.special || c.fromSlotIn ? ' special' : ''}` },
+        `${c.special ? '★ ' : ''}${c.fromSlotIn ? '⮕ ' : ''}${c.name}`)));
+    enemyQueue.innerHTML = '';
+    const ec = nextChip(battle, 'enemy').chip;
+    enemyQueue.append(h('div', { class: 'queue-chip' }, ec.name));
+    battle.sides.player.slotIns.forEach((c, i) => {
+      slotBtns[i].disabled = battle.sides.player.slotInUsed[i]
+        || battle.sides.player.pendingSlotIn !== null
+        || battle.winner !== null;
+    });
+  }
+
+  function flash(side) {
+    const el = document.getElementById(`fighter-${side}`);
+    el.classList.remove('hit');
+    void el.offsetWidth; // reinicia a animação
+    el.classList.add('hit');
+  }
+
+  function describe(ev) {
+    const name = s => battle.sides[s].navi.name;
+    switch (ev.type) {
+      case 'chip': return `${name(ev.side)} usou ${ev.chip.name}!`;
+      case 'naviAttack': return `${name(ev.side)} disparou ${ev.chip.name}!`;
+      case 'damage': return `${name(ev.side)} sofreu ${ev.amount} de dano${ev.super ? ' — SUPER EFETIVO!' : '!'}`;
+      case 'guard': return `${name(ev.side)} se protege (${ev.amount})!`;
+      case 'heal': return `${name(ev.side)} recuperou ${ev.amount} HP!`;
+      case 'reload': return `Deck de ${name(ev.side)} recarregado!`;
+      case 'end': return ev.byLimit ? 'Limite de rounds atingido!' : (ev.winner === 'player' ? 'VITÓRIA!' : 'DERROTA...');
+    }
+    return '';
+  }
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms / speed));
+
+  async function loop() {
+    updateHud();
+    await sleep(800);
+    while (battle.winner === null) {
+      const aiIdx = aiChooseSlotIn(battle);
+      if (aiIdx !== null && useSlotIn(battle, 'enemy', aiIdx)) {
+        log(`${opponent.config.navi.name} usou Slot-In!`);
+        await sleep(500);
+      }
+      const events = playRound(battle);
+      for (const ev of events) {
+        log(describe(ev));
+        if (ev.type === 'damage') flash(ev.side);
+        updateHud();
+        await sleep(550);
+      }
+      await sleep(350);
+    }
+    await sleep(900);
+    onEnd({
+      winner: battle.winner,
+      rounds: battle.round,
+      playerHp: battle.sides.player.hp,
+      playerMaxHp: battle.sides.player.navi.maxHp,
+      enemyName: opponent.config.navi.name,
+    });
+  }
+
+  loop();
+}
+
+export function renderResult(root, result, { onRematch, onNewDeck }) {
+  root.innerHTML = '';
+  const won = result.winner === 'player';
+  root.append(h('div', { class: 'result-box' },
+    h('h1', { class: won ? 'win' : 'lose' }, won ? 'VITÓRIA!' : 'DERROTA...'),
+    h('p', { class: 'result-stats' },
+      `vs ${result.enemyName} • ${result.rounds} rounds • seu HP: ${result.playerHp}/${result.playerMaxHp}`),
+    h('div', { class: 'result-actions' },
+      h('button', { class: 'big', onclick: onRematch }, 'REVANCHE'),
+      h('button', { onclick: onNewDeck }, 'NOVO DECK'))));
 }
