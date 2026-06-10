@@ -74,3 +74,120 @@ test('useSlotIn recusa índice inválido, repetição e segundo pendente', () =>
   assert.ok(useSlotIn(b, 'player', 0));
   assert.equal(useSlotIn(b, 'player', 1), false); // já há um pendente
 });
+
+test('chip mais rápido age primeiro', () => {
+  const b = makeBattle(
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ name: 'Rápido', speed: 10 })) },
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ name: 'Lento', speed: 1 })) },
+  );
+  const events = playRound(b);
+  const uses = events.filter(e => e.type === 'chip');
+  assert.equal(uses[0].side, 'player');
+  assert.equal(uses[1].side, 'enemy');
+});
+
+test('ataque causa dano com multiplicador elemental', () => {
+  const b = makeBattle(
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ element: 'fogo', power: 50, speed: 10 })) },
+    { navi: { element: 'madeira', maxHp: 300 }, deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'heal', power: 1, speed: 1 })) },
+  );
+  const events = playRound(b);
+  const dmg = events.find(e => e.type === 'damage');
+  assert.equal(dmg.amount, 100); // 50 x2 (fogo > madeira)
+  assert.equal(dmg.super, true);
+  assert.equal(b.sides.enemy.hp, 300 - 100 + 1); // sofreu 100, curou 1
+});
+
+test('defesa bloqueia dano no mesmo round e expira', () => {
+  const b = makeBattle(
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ power: 80, speed: 5 })) },
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'defense', power: 100, speed: 12 })) },
+  );
+  playRound(b); // defesa (vel 12) age antes do ataque de 80: bloqueia tudo
+  assert.equal(b.sides.enemy.hp, 300);
+  // round seguinte: nova defesa reaplicada, continua bloqueando
+  playRound(b);
+  assert.equal(b.sides.enemy.hp, 300);
+});
+
+test('defesa parcial deixa passar o excedente', () => {
+  const b = makeBattle(
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ power: 80, speed: 5 })) },
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'defense', power: 30, speed: 12 })) },
+  );
+  playRound(b);
+  assert.equal(b.sides.enemy.hp, 300 - 50); // 80 - 30 bloqueados
+});
+
+test('cura não passa do HP máximo', () => {
+  const b = makeBattle(
+    { navi: { maxHp: 300 }, deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'heal', power: 999, speed: 10 })) },
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ power: 10, speed: 1 })) },
+  );
+  playRound(b); // toma 10 depois de curar 0 (já cheio)
+  assert.equal(b.sides.player.hp, 290);
+  playRound(b); // cura 10 (volta ao teto), toma 10
+  assert.equal(b.sides.player.hp, 290);
+});
+
+test('deck esgota, dispara Navi Attack e recarrega', () => {
+  const b = makeBattle(
+    { navi: { naviAttack: { name: 'Especial', power: 70 } }, deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'heal', power: 1, speed: 10 })) },
+    { navi: { maxHp: 9999 }, deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'heal', power: 1, speed: 1 })) },
+  );
+  for (let i = 0; i < DECK_SIZE; i++) playRound(b);
+  assert.equal(nextChip(b, 'player').source, 'navi');
+  const events = playRound(b); // round 13: os DOIS lados disparam o Navi Attack
+  const na = events.find(e => e.type === 'naviAttack' && e.side === 'player');
+  assert.ok(na);
+  assert.equal(b.sides.enemy.hp, 9999 - 70); // só o Navi Attack do jogador feriu o inimigo
+  assert.equal(b.sides.player.deckIndex, 0); // recarregou
+});
+
+test('slot-in substitui o próximo chip, é consumido e não avança o deck', () => {
+  const b = makeBattle(
+    { slotIns: [chip({ name: 'Reserva', power: 99, speed: 10 }), chip(), chip()] },
+    { navi: { maxHp: 9999 }, deck: Array.from({ length: DECK_SIZE }, () => chip({ kind: 'heal', power: 1, speed: 1 })) },
+  );
+  useSlotIn(b, 'player', 0);
+  const events = playRound(b);
+  const use = events.find(e => e.type === 'chip' && e.side === 'player');
+  assert.equal(use.chip.name, 'Reserva');
+  assert.equal(use.source, 'slotin');
+  assert.equal(b.sides.player.deckIndex, 0); // deck não andou
+  assert.equal(b.sides.player.slotInUsed[0], true);
+  assert.equal(b.sides.player.pendingSlotIn, null);
+  assert.equal(useSlotIn(b, 'player', 0), false); // não reutiliza
+});
+
+test('batalha termina quando um lado zera; playRound depois disso lança erro', () => {
+  const b = makeBattle(
+    { deck: Array.from({ length: DECK_SIZE }, () => chip({ power: 9999, speed: 10 })) },
+    {},
+  );
+  const events = playRound(b);
+  assert.equal(b.winner, 'player');
+  assert.equal(b.sides.enemy.hp, 0);
+  const end = events.find(e => e.type === 'end');
+  assert.equal(end.winner, 'player');
+  // o perdedor não age depois de morrer
+  assert.equal(events.filter(e => e.type === 'chip' && e.side === 'enemy').length, 0);
+  assert.throws(() => playRound(b));
+});
+
+test('limite de rounds decide por % de HP; empate é derrota do jogador', () => {
+  // Lados simétricos (só curas + Navi Attack de 1): a cura repõe o dano,
+  // então no round 100 os dois têm o mesmo % de HP → empate → enemy vence.
+  const heals = () => Array.from({ length: DECK_SIZE }, () => chip({ kind: 'heal', power: 1, speed: 5 }));
+  const slotHeals = () => [chip({ kind: 'heal', power: 1 }), chip({ kind: 'heal', power: 1 }), chip({ kind: 'heal', power: 1 })];
+  const b = makeBattle(
+    { navi: { maxHp: 300, naviAttack: { name: 'X', power: 1 } }, deck: heals(), slotIns: slotHeals() },
+    { navi: { maxHp: 300, naviAttack: { name: 'X', power: 1 } }, deck: heals(), slotIns: slotHeals() },
+  );
+  let last = [];
+  while (b.winner === null) last = playRound(b);
+  assert.equal(b.round, ROUND_LIMIT);
+  const end = last.find(e => e.type === 'end');
+  assert.equal(end.byLimit, true);
+  assert.equal(b.winner, 'enemy');
+});
